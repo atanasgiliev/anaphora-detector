@@ -23,6 +23,7 @@ const dlCsvBtn           = document.getElementById("downloadCsvBtn");
 // Options
 const optAna             = document.getElementById("optAnaphora");
 const optEpi             = document.getElementById("optEpiphora");
+const optWR              = document.getElementById("optWordRepetition");
 const optPhraseLen       = document.getElementById("optPhraseLen");
 const optPhraseLenVal    = document.getElementById("optPhraseLenVal");
 const optWindow          = document.getElementById("optWindow");
@@ -103,8 +104,8 @@ runBtn.addEventListener("click", async () => {
     if (!textContent || !pyLoaded) return;
 
     // Validate: at least one type checked
-    if (!optAna.checked && !optEpi.checked) {
-        setStatus("Please select at least one type (Anaphora or Epiphora).", true);
+    if (!optAna.checked && !optEpi.checked && !optWR.checked) {
+        setStatus("Please select at least one detection type.", true);
         return;
     }
 
@@ -120,17 +121,18 @@ runBtn.addEventListener("click", async () => {
 
     // Write options
     const options = {
-        detect_anaphora:      optAna.checked,
-        detect_epiphora:      optEpi.checked,
-        phrase_length:        parseInt(optPhraseLen.value),
-        distance_window:      parseInt(optWindow.value),
-        min_occurrences:      parseInt(optMinOcc.value),
-        skip_stopwords:       optStopwords.checked,
-        strip_accents:        optAccents.checked,
-        strip_breathings:     optBreathings.checked,
-        strip_iota_subscript: optIotaSub.checked,
-        handle_elision:       optElision.checked,
-        handle_nu_movable:    optNuMovable.checked,
+        detect_anaphora:         optAna.checked,
+        detect_epiphora:         optEpi.checked,
+        detect_word_repetition:  optWR.checked,
+        phrase_length:           parseInt(optPhraseLen.value),
+        distance_window:         parseInt(optWindow.value),
+        min_occurrences:         parseInt(optMinOcc.value),
+        skip_stopwords:          optStopwords.checked,
+        strip_accents:           optAccents.checked,
+        strip_breathings:        optBreathings.checked,
+        strip_iota_subscript:    optIotaSub.checked,
+        handle_elision:          optElision.checked,
+        handle_nu_movable:       optNuMovable.checked,
     };
     pyodide.FS.writeFile("/options.json", JSON.stringify(options));
 
