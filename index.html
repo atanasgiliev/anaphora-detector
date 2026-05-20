@@ -35,6 +35,12 @@
             consecutive verse lines. Example: <em>πολλοί… / πολλοί… / πολλοί…</em></dd>
         <dt>Epiphora (Antistrophe)</dt>
         <dd>Repetition at the <em>end</em> of consecutive verse lines.</dd>
+        <dt>Word Repetition</dt>
+        <dd>Repetition of the same word or phrase at the <em>beginning of any
+            clause</em>, where clauses are delimited by punctuation (. · ; ,)
+            as well as line breaks. This catches figures like Apollonius's
+            <em>πολλὰ δ᾽</em> repeated across a period boundary within the
+            same line or across lines. Highlighted in violet (W).</dd>
         <dt>Symploce</dt>
         <dd>A line may be highlighted for both figures simultaneously (gold start,
             teal end).</dd>
@@ -102,6 +108,10 @@
       <label class="option">
         <input type="checkbox" id="optEpiphora" checked>
         Epiphora (line-final repetition)
+      </label>
+      <label class="option">
+        <input type="checkbox" id="optWordRepetition">
+        Word Repetition (clause-initial repetition across punctuation)
       </label>
       <p class="note">At least one must be selected.</p>
     </fieldset>
@@ -180,6 +190,7 @@
     <ul>
       <li><span class="legend-box anaphora"></span> Gold — Anaphora (A): line-initial repetition</li>
       <li><span class="legend-box epiphora"></span> Teal — Epiphora (E): line-final repetition</li>
+      <li><span class="legend-box wordrepeat"></span> Violet — Word Repetition (W): clause-initial repetition across punctuation</li>
     </ul>
   </section>
 
