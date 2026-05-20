@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Greek Anaphora &amp; Epiphora Detector</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="container">
+
+  <header>
+    <h1>Greek Anaphora &amp; Epiphora Detector</h1>
+    <p class="subtitle">
+      An analytical tool for identifying word and phrase repetition at verse-line
+      boundaries in Ancient Greek texts
+    </p>
+  </header>
+
+  <!-- Help -->
+  <details class="help-box">
+    <summary><strong>Help &amp; Usage</strong></summary>
+    <div class="help-content">
+      <h3>How to use the detector</h3>
+      <ol>
+        <li>Upload or paste a UTF-8 Greek text (verse, one line per verse line).</li>
+        <li>Configure the detection options below.</li>
+        <li>Click <em>Run Detector</em>.</li>
+        <li>Results appear below with an annotated text and an occurrence table.</li>
+      </ol>
+
+      <h3>Definitions</h3>
+      <dl>
+        <dt>Anaphora</dt>
+        <dd>Repetition of the same word or phrase at the <em>beginning</em> of
+            consecutive verse lines. Example: <em>πολλοί… / πολλοί… / πολλοί…</em></dd>
+        <dt>Epiphora (Antistrophe)</dt>
+        <dd>Repetition at the <em>end</em> of consecutive verse lines.</dd>
+        <dt>Symploce</dt>
+        <dd>A line may be highlighted for both figures simultaneously (gold start,
+            teal end).</dd>
+      </dl>
+
+      <h3>Distance window</h3>
+      <p>
+        The maximum number of consecutive lines within which the repetition must
+        occur. A window of 2 means the same phrase must appear in two immediately
+        adjacent lines; a window of 4 allows up to three intervening lines.
+      </p>
+
+      <h3>Phrase length</h3>
+      <p>
+        How many words to compare. Length 1 matches single repeated words;
+        length 2 requires both the first (or last) two words to match, and so on.
+      </p>
+
+      <h3>Stop-word transparency</h3>
+      <p>
+        When enabled, common particles, articles and prepositions (καί, δέ, ὁ, ἡ,
+        γάρ, μέν, ἐν, …) at the start or end of a line are skipped when
+        determining the phrase to compare — but the line is still marked as
+        anaphora/epiphora and the table notes that a stop-word was skipped.
+      </p>
+
+      <h3>Normalisation options</h3>
+      <p>
+        All options affect only the <em>comparison key</em>; the original text is
+        displayed unchanged in the output.
+      </p>
+      <ul>
+        <li><strong>Strip accents</strong> — treats ά/α/ᾶ as the same for comparison.</li>
+        <li><strong>Strip breathings</strong> — treats ἁ/ἀ as the same.</li>
+        <li><strong>Strip iota subscript</strong> — treats ᾧ/ω as the same.</li>
+        <li><strong>Handle elision</strong> — strips trailing apostrophe before
+            comparison (ἀλλ' ≈ ἀλλά).</li>
+        <li><strong>Handle nu-movable</strong> — strips final ν when preceded by
+            ι or ε (ἐστίν ≈ ἐστί).</li>
+      </ul>
+    </div>
+  </details>
+
+  <!-- Input -->
+  <section class="panel">
+    <label class="file-label">Upload a UTF-8 encoded Greek text file</label>
+    <input type="file" id="fileInput" accept=".txt">
+    <p class="note" style="margin-top:0.5rem;">
+      — or paste Greek text directly —
+    </p>
+    <textarea id="pasteArea" rows="6"
+              placeholder="Paste Ancient Greek verse here…"
+              spellcheck="false"></textarea>
+  </section>
+
+  <!-- Options -->
+  <section class="panel options">
+
+    <fieldset>
+      <legend>Figures to Detect</legend>
+      <label class="option">
+        <input type="checkbox" id="optAnaphora" checked>
+        Anaphora (line-initial repetition)
+      </label>
+      <label class="option">
+        <input type="checkbox" id="optEpiphora" checked>
+        Epiphora (line-final repetition)
+      </label>
+      <p class="note">At least one must be selected.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Detection Parameters</legend>
+
+      <label class="option slider-row">
+        <span>Phrase length (words to match):</span>
+        <input type="range" id="optPhraseLen" min="1" max="5" value="1" step="1">
+        <span id="optPhraseLenVal" class="slider-val">1</span>
+      </label>
+
+      <label class="option slider-row">
+        <span>Distance window (consecutive lines):</span>
+        <input type="range" id="optWindow" min="2" max="10" value="2" step="1">
+        <span id="optWindowVal" class="slider-val">2</span>
+      </label>
+
+      <label class="option slider-row">
+        <span>Minimum occurrences to report:</span>
+        <input type="range" id="optMinOcc" min="2" max="6" value="2" step="1">
+        <span id="optMinOccVal" class="slider-val">2</span>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Stop-word Transparency</legend>
+      <label class="option">
+        <input type="checkbox" id="optStopwords" checked>
+        Skip leading/trailing particles &amp; articles when matching
+        <span style="font-size:0.88em;color:#555;">
+          (καί, δέ, ὁ, ἡ, γάρ, μέν, ἐν, …)
+        </span>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Normalisation Options</legend>
+      <label class="option">
+        <input type="checkbox" id="optAccents" checked>
+        Strip accents before comparison
+      </label>
+      <label class="option">
+        <input type="checkbox" id="optBreathings" checked>
+        Strip breathings before comparison
+      </label>
+      <label class="option">
+        <input type="checkbox" id="optIotaSub">
+        Strip iota subscript before comparison
+      </label>
+      <label class="option">
+        <input type="checkbox" id="optElision">
+        Handle elision
+        <span style="font-size:0.88em;color:#555;">(ἀλλ' ≈ ἀλλά)</span>
+      </label>
+      <label class="option">
+        <input type="checkbox" id="optNuMovable">
+        Handle nu movable
+        <span style="font-size:0.88em;color:#555;">(ἐστίν ≈ ἐστί)</span>
+      </label>
+      <p class="note">Normalisation affects comparison only; original text is preserved in output.</p>
+    </fieldset>
+
+  </section>
+
+  <!-- Run -->
+  <section class="panel actions">
+    <button id="runBtn" disabled>Run Detector</button>
+    <div id="status" class="status"></div>
+  </section>
+
+  <!-- Legend -->
+  <section class="panel legend">
+    <h2>Highlight Legend</h2>
+    <ul>
+      <li><span class="legend-box anaphora"></span> Gold — Anaphora (A): line-initial repetition</li>
+      <li><span class="legend-box epiphora"></span> Teal — Epiphora (E): line-final repetition</li>
+    </ul>
+  </section>
+
+  <!-- Output -->
+  <section class="panel output">
+    <h2>Output</h2>
+    <div class="downloads">
+      <button id="downloadHtmlBtn" disabled>Download HTML</button>
+      <button id="downloadCsvBtn"  disabled>Download CSV</button>
+      <span class="download-note">(enabled after analysis)</span>
+    </div>
+    <div id="output"></div>
+    <div id="perLineTable"></div>
+  </section>
+
+  <footer>
+    <p>
+      Greek Anaphora &amp; Epiphora Detector by Atanas G. Iliev
+      · Research Tool for Classical Philology
+    </p>
+  </footer>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

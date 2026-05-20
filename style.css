@@ -1,0 +1,388 @@
+/* ── Reset & base ─────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:          #faf9f6;
+  --surface:     #ffffff;
+  --border:      #ddd;
+  --text:        #1a1a1a;
+  --muted:       #666;
+  --accent:      #3a5a8c;
+  --accent-h:    #2e4870;
+  --btn-text:    #ffffff;
+  --radius:      6px;
+  --shadow:      0 1px 4px rgba(0,0,0,0.08);
+
+  /* Highlight colours — must match detector.py & app.js */
+  --ana-bg:      rgba(212, 160, 23, 0.32);
+  --ana-line:    #b8860b;
+  --epi-bg:      rgba(30, 160, 160, 0.30);
+  --epi-line:    #1a8a8a;
+}
+
+body {
+  font-family: "Georgia", "Times New Roman", Times, serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+.container {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 3rem;
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+header {
+  margin-bottom: 1.8rem;
+  border-bottom: 2px solid var(--accent);
+  padding-bottom: 1rem;
+}
+
+header h1 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: -0.01em;
+}
+
+.subtitle {
+  color: var(--muted);
+  font-size: 0.95rem;
+  margin-top: 0.3rem;
+  font-style: italic;
+}
+
+/* ── Help box ─────────────────────────────────────────────────────────────── */
+.help-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.2rem;
+  box-shadow: var(--shadow);
+}
+
+.help-box summary {
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.95rem;
+  color: var(--accent);
+}
+
+.help-content {
+  margin-top: 1rem;
+  font-size: 0.92rem;
+  line-height: 1.65;
+}
+
+.help-content h3 {
+  font-size: 1rem;
+  margin: 1rem 0 0.3rem;
+  color: var(--accent);
+}
+
+.help-content h3:first-child { margin-top: 0; }
+
+.help-content dt {
+  font-weight: bold;
+  margin-top: 0.5rem;
+}
+
+.help-content dd {
+  margin-left: 1.2rem;
+  color: var(--muted);
+}
+
+.help-content ol,
+.help-content ul {
+  padding-left: 1.4rem;
+}
+
+.help-content li { margin-bottom: 0.2rem; }
+
+/* ── Panels ──────────────────────────────────────────────────────────────── */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.1rem 1.2rem;
+  margin-bottom: 1.2rem;
+  box-shadow: var(--shadow);
+}
+
+/* ── File input ───────────────────────────────────────────────────────────── */
+.file-label {
+  display: block;
+  font-size: 0.9rem;
+  color: var(--muted);
+  margin-bottom: 0.4rem;
+}
+
+input[type="file"] {
+  display: block;
+  font-size: 0.9rem;
+}
+
+textarea#pasteArea {
+  display: block;
+  width: 100%;
+  margin-top: 0.4rem;
+  padding: 0.5rem 0.6rem;
+  font-family: "Georgia", serif;
+  font-size: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  resize: vertical;
+  background: #fefefe;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+textarea#pasteArea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ── Options ──────────────────────────────────────────────────────────────── */
+.options fieldset {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.7rem 1rem 0.8rem;
+  margin-bottom: 0.9rem;
+}
+
+.options fieldset:last-child { margin-bottom: 0; }
+
+.options legend {
+  font-size: 0.9rem;
+  font-weight: bold;
+  color: var(--accent);
+  padding: 0 0.3rem;
+}
+
+.option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  margin-bottom: 0.45rem;
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.option input[type="checkbox"] {
+  margin-top: 0.2rem;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+
+/* Slider rows */
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.slider-row span:first-child {
+  min-width: 230px;
+  color: var(--text);
+}
+
+input[type="range"] {
+  flex: 1;
+  min-width: 100px;
+  accent-color: var(--accent);
+}
+
+.slider-val {
+  min-width: 1.5rem;
+  text-align: center;
+  font-weight: bold;
+  color: var(--accent);
+}
+
+.note {
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-top: 0.4rem;
+  font-style: italic;
+}
+
+/* ── Run button ───────────────────────────────────────────────────────────── */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+button {
+  background: var(--accent);
+  color: var(--btn-text);
+  border: none;
+  border-radius: var(--radius);
+  padding: 0.55rem 1.2rem;
+  font-size: 0.95rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+button:hover:not(:disabled) { background: var(--accent-h); }
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.status {
+  font-size: 0.9rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.status.error { color: #b00; font-style: normal; font-weight: 600; }
+
+/* ── Legend ───────────────────────────────────────────────────────────────── */
+.legend h2 {
+  font-size: 1rem;
+  margin-bottom: 0.5rem;
+  color: var(--accent);
+}
+
+.legend ul {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1.5rem;
+}
+
+.legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+}
+
+.legend-box {
+  display: inline-block;
+  width: 18px;
+  height: 14px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.legend-box.anaphora {
+  background: var(--ana-bg);
+  border-bottom: 2px solid var(--ana-line);
+}
+
+.legend-box.epiphora {
+  background: var(--epi-bg);
+  border-bottom: 2px solid var(--epi-line);
+}
+
+/* ── Output section ───────────────────────────────────────────────────────── */
+.output h2 {
+  font-size: 1rem;
+  margin-bottom: 0.6rem;
+  color: var(--accent);
+}
+
+.downloads {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.download-note {
+  font-size: 0.82rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.output-section {
+  margin-bottom: 1.5rem;
+}
+
+.output-section h3 {
+  font-size: 0.95rem;
+  color: var(--accent);
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.25rem;
+}
+
+/* Annotated text */
+pre.source {
+  white-space: pre-wrap;
+  font-family: "Georgia", "Times New Roman", serif;
+  font-size: 1.05rem;
+  line-height: 1.7;
+  background: #fefefe;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.1rem;
+  overflow-x: auto;
+}
+
+/* Highlights rendered inside the <pre> */
+.rep-anaphora {
+  background: var(--ana-bg);
+  border-bottom: 2px solid var(--ana-line);
+  border-radius: 2px;
+}
+
+.rep-epiphora {
+  background: var(--epi-bg);
+  border-bottom: 2px solid var(--epi-line);
+  border-radius: 2px;
+}
+
+/* Occurrence table */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+th, td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: #f5f4f1;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+tr:nth-child(even) td { background: #faf9f6; }
+
+/* ── Footer ───────────────────────────────────────────────────────────────── */
+footer {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.82rem;
+  color: var(--muted);
+  text-align: center;
+  font-style: italic;
+}
+
+/* ── Responsive tweaks ────────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .container { padding: 1rem; }
+  header h1  { font-size: 1.35rem; }
+  .slider-row span:first-child { min-width: 0; width: 100%; }
+}
