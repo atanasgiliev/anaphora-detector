@@ -1,25 +1,32 @@
 """
-Greek Anaphora & Epiphora Detector
-===================================
-Detects repetition of words/phrases at the beginnings (anaphora) and
-ends (epiphora) of consecutive verse lines in Ancient Greek texts.
+Greek Anaphora, Epiphora & Word-Repetition Detector
+=====================================================
+Three detection modes:
+  • Anaphora       — same phrase at the START of consecutive verse lines
+  • Epiphora       — same phrase at the END of consecutive verse lines
+  • Word Repetition — same phrase at the START of any clause (delimited by
+                      punctuation: . · ; , and newlines), searching across a
+                      configurable window of consecutive clauses
 
-Architecture mirrors the hiatus-detector: runs inside Pyodide in the
-browser; options are passed via /options.json written by app.js.
+Architecture mirrors the hiatus-detector: runs inside Pyodide; options are
+passed via /options.json written by app.js.
+
+Elision fix (v2)
+----------------
+The elision check is now done on the RAW word BEFORE any diacritic stripping
+so that apostrophe codepoints are never accidentally removed by NFD
+decomposition. The stripped stem is then passed into the normal pipeline.
 """
 
 import unicodedata
-import html
+import html as html_mod
 import csv
 import json
+import re
 from pathlib import Path
-from collections import defaultdict
 
 # ---------------------------------------------------------------------------
-# Greek stop-words (particles, articles, conjunctions, common pronouns)
-# These are "transparent" for anaphora/epiphora detection: if a line begins
-# or ends with one of these, the detector looks past it for the content word.
-# Stored as NFC strings; comparison uses normalised forms.
+# Greek stop-words
 # ---------------------------------------------------------------------------
 
 STOP_WORDS_NFC = {
@@ -34,7 +41,7 @@ STOP_WORDS_NFC = {
     "ἐπειδὴ","ὄτε","ὄτι","ἵνα","ὄφρα","ὄφρ","ὁτε","ὁτι",
     # negations
     "οὐ","οὐκ","οὐχ","οὔ","μή","μὴ","μήτε","μήτ","οὔτε","οὔτ",
-    # prepositions (short ones most likely to be line-initial noise)
+    # prepositions
     "ἐν","ἐκ","ἐξ","εἰς","ἐς","πρός","πρὸς","ἀπό","ἀπὸ","ὑπό","ὑπὸ",
     "ἐπί","ἐπὶ","περί","περὶ","παρά","παρὰ","κατά","κατὰ","διά","διὰ",
     "μετά","μετὰ","ἀντί","ἀντὶ","ἀμφί","ἀμφὶ",
@@ -43,101 +50,183 @@ STOP_WORDS_NFC = {
     "αὐτοῦ","αὐτῆς","αὐτοῖς","αὐταῖς","αὐτούς","αὐτάς","αὐτῶν","αὐτῷ",
 }
 
+# Apostrophe codepoints used in Greek texts for elision
+_APOSTROPHES = {"'", "\u2019", "\u02bc", "\u0027", "\u02b9"}
+
 # ---------------------------------------------------------------------------
 # Normalization
 # ---------------------------------------------------------------------------
-
-def _strip_combining(nfd_str, categories):
-    """Remove combining characters whose unicodedata.category is in `categories`."""
-    return "".join(c for c in nfd_str if unicodedata.category(c) not in categories)
-
 
 def normalize_word(word: str, opts: dict) -> str:
     """
     Return a normalised comparison key for `word`.
 
-    Pipeline (each step is opt-in via opts):
-      1. NFC → NFD
-      2. Lowercase
-      3. Strip accents  (combining acute U+0301, grave U+0300, circumflex U+0342)
-      4. Strip breathings (smooth U+0313, rough U+0314)
-      5. Strip iota subscript (U+0345)
-      6. Handle elision: trailing apostrophe → restore likely elided vowel
-      7. Handle nu-movable: strip final ν if preceded by ι or ε
-      8. Back to NFC
-    """
-    w = unicodedata.normalize("NFD", word.lower())
+    Elision is handled FIRST on the raw string before NFD decomposition,
+    so apostrophe codepoints are never accidentally stripped by diacritic
+    removal. The elided stem is then passed through the rest of the pipeline.
 
+    Pipeline:
+      1. Elision check on raw word (strip trailing apostrophe + placeholder)
+      2. NFD + lowercase
+      3. Strip accents   (U+0301 acute, U+0300 grave, U+0342 circumflex)
+      4. Strip breathings (U+0313 smooth, U+0314 rough)
+      5. Strip iota subscript (U+0345)
+      6. Nu-movable: strip final ν when preceded by ι or ε
+      7. NFC
+    """
+    w = word
+
+    # Step 1 — elision (must precede NFD so apostrophes survive)
+    if opts.get("handle_elision", False):
+        if w and w[-1] in _APOSTROPHES:
+            w = w[:-1]
+            # We deliberately do NOT append a placeholder vowel:
+            # stripping the apostrophe lets ἀλλ' and ἀλλά both normalise to
+            # "αλλ" (after accent stripping), which is the correct comparison key.
+
+    # Step 2 — NFD + lowercase
+    w = unicodedata.normalize("NFD", w.lower())
+
+    # Step 3 — accents
     if opts.get("strip_accents", True):
-        # acute, grave, circumflex (Greek polytonic circumflex is U+0342)
         w = "".join(c for c in w if c not in {"\u0301", "\u0300", "\u0342"})
 
+    # Step 4 — breathings
     if opts.get("strip_breathings", True):
         w = "".join(c for c in w if c not in {"\u0313", "\u0314"})
 
+    # Step 5 — iota subscript
     if opts.get("strip_iota_subscript", False):
         w = "".join(c for c in w if c != "\u0345")
 
-    # Remaining combining marks that are purely diacritical (category Mn)
-    # are stripped together with the above; make sure we don't strip
-    # diaeresis U+0308 here as it is phonemically significant (ϊ ≠ ι+ι).
-
+    # Step 6 — NFC
     w = unicodedata.normalize("NFC", w)
 
-    if opts.get("handle_elision", False):
-        # Strip trailing elision markers and restore a vowel.
-        # Greek elision apostrophe: U+2019 ' or plain '
-        if w and w[-1] in ("'", "\u2019", "\u02bc"):
-            w = w[:-1] + "α"   # placeholder final vowel for key comparison
-
+    # Step 7 — nu movable
     if opts.get("handle_nu_movable", False):
-        # Strip movable ν: word ends in ν, penultimate base letter is ι or ε
         if len(w) >= 2 and w[-1] == "ν" and w[-2] in ("ι", "ε"):
             w = w[:-1]
 
     return w
 
 
-def tokenize_line(line: str) -> list[dict]:
+# ---------------------------------------------------------------------------
+# Tokenization
+# ---------------------------------------------------------------------------
+
+# Punctuation characters that delimit clauses (for word-repetition mode)
+_CLAUSE_PUNCT = set(".,·;:\n")
+
+# Punctuation to strip from word edges when building tokens
+_WORD_PUNCT = ".,·;:!?\"''\u2019\u02bc—–\u2013\u2014-()[]⟨⟩"
+
+
+def tokenize_text(text: str) -> list[dict]:
     """
-    Split a line into word tokens. Each token is a dict:
-        text  – original Unicode string
-        key   – placeholder; filled in after normalization
-        start – char offset within line (for highlighting, future use)
-    Punctuation attached to a word is stripped for the token text.
+    Tokenise `text` into a flat list of token dicts, each carrying:
+        text        – original word string (punct stripped from edges)
+        raw         – original whitespace-separated chunk
+        norm        – filled in later by caller
+        char_start  – byte/char offset in `text` (for highlighting)
+        clause_break_before – True if this token begins a new clause
+        line_num    – 1-indexed line number
     """
-    PUNCT = set(".,·;:!?\"''\u2019\u02bc—–-()[]⟨⟩")
     tokens = []
-    for raw in line.split():
-        stripped = raw.strip("".join(PUNCT))
-        if stripped:
-            tokens.append({"text": stripped, "raw": raw})
+    pos = 0
+    line_num = 1
+    pending_break = True   # very first token starts a clause
+
+    for raw_chunk in re.split(r'(\s+)', text):
+        if not raw_chunk:
+            pos += len(raw_chunk)
+            continue
+
+        # Count newlines in whitespace chunks
+        if re.match(r'^\s+$', raw_chunk):
+            nl_count = raw_chunk.count('\n')
+            line_num += nl_count
+            if nl_count:
+                pending_break = True
+            pos += len(raw_chunk)
+            continue
+
+        # Strip word-level punctuation
+        word = raw_chunk.strip(_WORD_PUNCT)
+        if not word:
+            # Check if the chunk itself ends with clause punct
+            if raw_chunk and raw_chunk[-1] in _CLAUSE_PUNCT:
+                pending_break = True
+            pos += len(raw_chunk)
+            continue
+
+        # Did the chunk contain a clause-boundary character?
+        chunk_has_clause_break = any(c in _CLAUSE_PUNCT for c in raw_chunk
+                                     if c not in " \t")
+
+        tokens.append({
+            "text": word,
+            "raw": raw_chunk,
+            "norm": "",          # filled in by caller
+            "char_start": pos,
+            "clause_break_before": pending_break,
+            "line_num": line_num,
+        })
+
+        # If this chunk ends with clause-punctuation, next token starts a new clause
+        stripped_right = raw_chunk.rstrip()
+        if stripped_right and stripped_right[-1] in _CLAUSE_PUNCT:
+            pending_break = True
+        else:
+            pending_break = False
+
+        pos += len(raw_chunk)
+
+    return tokens
+
+
+def tokenize_line(line: str, line_char_offset: int = 0) -> list[dict]:
+    """Tokenise a single line, carrying char_start offsets (relative to full text)."""
+    tokens = []
+    pos = 0
+    for raw in re.split(r'(\s+)', line):
+        if not raw:
+            pos += len(raw)
+            continue
+        if re.match(r'^\s+$', raw):
+            pos += len(raw)
+            continue
+        word = raw.strip(_WORD_PUNCT)
+        if word:
+            # char_start: offset of the word within raw chunk + chunk offset in line
+            word_offset_in_raw = raw.find(word)
+            tokens.append({
+                "text": word,
+                "raw": raw,
+                "norm": "",
+                "char_start": line_char_offset + pos + word_offset_in_raw,
+            })
+        pos += len(raw)
     return tokens
 
 
 # ---------------------------------------------------------------------------
-# Options reader (mirrors hiatus detector pattern)
+# Options reader
 # ---------------------------------------------------------------------------
 
 def read_options() -> dict:
     defaults = {
-        # Detection scope
-        "detect_anaphora": True,
-        "detect_epiphora": True,
-        # Phrase length: number of words to match (1–4)
-        "phrase_length": 1,
-        # Distance window: match within N consecutive lines
-        "distance_window": 2,
-        # Normalization
-        "strip_accents": True,
-        "strip_breathings": True,
-        "strip_iota_subscript": False,
-        "handle_elision": False,
-        "handle_nu_movable": False,
-        # Stop-word transparency
-        "skip_stopwords": True,
-        # Minimum number of occurrences to report
-        "min_occurrences": 2,
+        "detect_anaphora":       True,
+        "detect_epiphora":       True,
+        "detect_word_repetition": False,
+        "phrase_length":         1,
+        "distance_window":       2,
+        "min_occurrences":       2,
+        "strip_accents":         True,
+        "strip_breathings":      True,
+        "strip_iota_subscript":  False,
+        "handle_elision":        False,
+        "handle_nu_movable":     False,
+        "skip_stopwords":        True,
     }
     opt_path = Path("/options.json")
     if opt_path.exists():
@@ -152,402 +241,307 @@ def read_options() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Core detection
+# Stop-word helpers
 # ---------------------------------------------------------------------------
 
 def _is_stopword(norm_key: str, norm_stops: set) -> bool:
     return norm_key in norm_stops
 
 
-def extract_phrase(tokens: list[dict], position: str, phrase_length: int,
-                   opts: dict, norm_stops: set) -> tuple[list[dict], bool]:
+def _skip_stops_start(toks, n, norm_stops, skip):
+    """Return list of (index, token) for the first n non-stop tokens."""
+    result = []
+    for i, t in enumerate(toks):
+        if skip and _is_stopword(t["norm"], norm_stops):
+            continue
+        result.append((i, t))
+        if len(result) == n:
+            break
+    return result
+
+
+def _skip_stops_end(toks, n, norm_stops, skip):
+    """Return list of (index, token) for the last n non-stop tokens (in order)."""
+    result = []
+    for i in range(len(toks) - 1, -1, -1):
+        t = toks[i]
+        if skip and _is_stopword(t["norm"], norm_stops):
+            continue
+        result.append((i, t))
+        if len(result) == n:
+            break
+    result.reverse()
+    return result
+
+
+def phrase_key(indexed_toks: list) -> str:
+    return " ".join(t["norm"] for _, t in indexed_toks)
+
+
+# ---------------------------------------------------------------------------
+# Group-finding (shared by all three modes)
+# ---------------------------------------------------------------------------
+
+def find_groups(items, window, min_occ, kind):
     """
-    Return (phrase_tokens, had_leading_stop) for `position` in {"start","end"}.
-
-    If skip_stopwords is on:
-      - For "start": skip leading stop-words, then take `phrase_length` tokens.
-      - For "end":   skip trailing stop-words, then take `phrase_length` tokens.
-    Returns the list of tokens forming the phrase, and whether a stop was skipped.
+    items : list of (unit_index, key, indexed_phrase_toks, had_stop, line_num)
+    window: max gap (in unit indices) between first and last member
+    Yields group dicts.
     """
-    if not tokens:
-        return [], False
+    used = set()
+    groups = []
+    n = len(items)
 
-    skip = opts.get("skip_stopwords", True)
-    toks = list(tokens)  # copy
+    for i in range(n):
+        idx_i, key_i, phrase_i, stop_i, lnum_i = items[i]
+        if not key_i or idx_i in used:
+            continue
 
-    had_stop = False
-    if position == "start":
-        if skip:
-            while toks and _is_stopword(toks[0]["norm"], norm_stops):
-                toks = toks[1:]
-                had_stop = True
-        phrase = toks[:phrase_length]
-    else:  # "end"
-        if skip:
-            while toks and _is_stopword(toks[-1]["norm"], norm_stops):
-                toks = toks[:-1]
-                had_stop = True
-        phrase = toks[-phrase_length:] if len(toks) >= phrase_length else toks
+        group = [i]
+        for j in range(i + 1, n):
+            idx_j, key_j, phrase_j, stop_j, lnum_j = items[j]
+            if idx_j - idx_i > window - 1:
+                break
+            if key_j == key_i:
+                group.append(j)
 
-    return phrase, had_stop
+        if len(group) < min_occ:
+            continue
+
+        groups.append({
+            "kind": kind,
+            "key": key_i,
+            "line_nums":    [items[g][4] for g in group],
+            "phrases":      [[t for _, t in items[g][2]] for g in group],
+            "had_stops":    [items[g][3] for g in group],
+            "unit_indices": [items[g][0] for g in group],
+        })
+        for g in group:
+            used.add(items[g][0])
+
+    return groups
 
 
-def phrase_key(phrase_tokens: list[dict]) -> str:
-    return " ".join(t["norm"] for t in phrase_tokens)
+# ---------------------------------------------------------------------------
+# HTML-building helpers
+# ---------------------------------------------------------------------------
 
-
-def detect_repetitions(text: str) -> tuple[str, list[dict]]:
+def _build_line_html(raw_line: str, toks: list, highlight_indices: dict) -> str:
     """
-    Main entry point.
-
-    Returns:
-        annotated_html – the full text with <span> tags for anaphora/epiphora
-        occurrences    – list of occurrence dicts for CSV/table output
+    Rebuild a raw line as HTML, wrapping tokens whose list-index appears in
+    `highlight_indices` (a dict mapping tok_index → css_class string).
+    Uses find() scanning so the original spacing and punctuation are preserved.
     """
-    opts = read_options()
-    phrase_length  = max(1, int(opts.get("phrase_length", 1)))
-    window         = max(2, int(opts.get("distance_window", 2)))
-    min_occ        = max(2, int(opts.get("min_occurrences", 2)))
-    detect_ana     = opts.get("detect_anaphora", True)
-    detect_epi     = opts.get("detect_epiphora", True)
+    parts = []
+    remaining = raw_line
+    for i, t in enumerate(toks):
+        tok_text = t["text"]
+        idx = remaining.find(tok_text)
+        if idx == -1:
+            continue
+        parts.append(html_mod.escape(remaining[:idx]))
+        escaped = html_mod.escape(tok_text)
+        css = highlight_indices.get(i)
+        if css:
+            parts.append(f'<span class="{css}">{escaped}</span>')
+        else:
+            parts.append(escaped)
+        remaining = remaining[idx + len(tok_text):]
+    parts.append(html_mod.escape(remaining))
+    return "".join(parts)
 
-    # Pre-normalise stop-word set
-    norm_stops = {
-        normalize_word(w, opts) for w in STOP_WORDS_NFC
-    }
 
-    lines = text.split("\n")
-    # Tokenise every line
+# ---------------------------------------------------------------------------
+# Main detection entry point
+# ---------------------------------------------------------------------------
+
+def detect_repetitions(text: str):
+    opts         = read_options()
+    phrase_length = max(1, int(opts.get("phrase_length", 1)))
+    window        = max(2, int(opts.get("distance_window", 2)))
+    min_occ       = max(2, int(opts.get("min_occurrences", 2)))
+    detect_ana    = opts.get("detect_anaphora", True)
+    detect_epi    = opts.get("detect_epiphora", True)
+    detect_wr     = opts.get("detect_word_repetition", False)
+    skip          = opts.get("skip_stopwords", True)
+
+    norm_stops = {normalize_word(w, opts) for w in STOP_WORDS_NFC}
+
+    # ── Line-level data (for anaphora / epiphora) ───────────────────────────
+    raw_lines = text.split("\n")
     line_data = []
-    for ln, line in enumerate(lines):
-        toks = tokenize_line(line)
+    char_offset = 0
+    for ln_idx, raw_line in enumerate(raw_lines):
+        toks = tokenize_line(raw_line, line_char_offset=char_offset)
         for t in toks:
             t["norm"] = normalize_word(t["text"], opts)
         line_data.append({
-            "line_num": ln + 1,   # 1-indexed
-            "raw": line,
+            "line_num": ln_idx + 1,
+            "raw": raw_line,
             "tokens": toks,
         })
+        char_offset += len(raw_line) + 1  # +1 for the \n
 
-    # For each line, extract start-phrase and end-phrase keys
-    for ld in line_data:
-        toks = ld["tokens"]
-        start_phrase, start_had_stop = extract_phrase(toks, "start", phrase_length, opts, norm_stops)
-        end_phrase,   end_had_stop   = extract_phrase(toks, "end",   phrase_length, opts, norm_stops)
-        ld["start_phrase"]     = start_phrase
-        ld["start_key"]        = phrase_key(start_phrase)
-        ld["start_had_stop"]   = start_had_stop
-        ld["end_phrase"]       = end_phrase
-        ld["end_key"]          = phrase_key(end_phrase)
-        ld["end_had_stop"]     = end_had_stop
+    occurrences = []
 
-    # -----------------------------------------------------------------------
-    # Find anaphora: groups of consecutive lines (within window) sharing
-    # the same start_key.
-    # -----------------------------------------------------------------------
-    # We collect all (line_idx, key) pairs and group by consecutive runs.
-
-    occurrences = []   # final list
-
-    def find_groups(line_indices_keys, kind):
-        """
-        Given a list of (line_idx, phrase_tokens, had_stop) tuples,
-        find groups where the same key appears within `window` consecutive lines.
-        Returns list of group dicts.
-        """
-        # Group into consecutive windows sharing the same key
-        # Strategy: sliding window of size `window`; any key appearing
-        # >= min_occ times within those lines constitutes a match.
-
-        groups = []
-        n = len(line_indices_keys)
-        used = set()  # line indices already assigned to a group
-
-        for i in range(n):
-            idx_i, key_i, phrase_i, stop_i = line_indices_keys[i]
-            if not key_i:
-                continue
-            if idx_i in used:
-                continue
-
-            # Collect all lines within the window that share key_i
-            group_lines = [i]
-            for j in range(i + 1, n):
-                idx_j, key_j, phrase_j, stop_j = line_indices_keys[j]
-                # Within distance window?
-                if idx_j - idx_i > window - 1:
-                    break
-                if key_j == key_i:
-                    group_lines.append(j)
-
-            if len(group_lines) < min_occ:
-                continue
-
-            member_line_nums = [line_indices_keys[g][0] + 1 for g in group_lines]  # 1-indexed
-            member_phrases   = [line_indices_keys[g][2] for g in group_lines]
-            member_stops     = [line_indices_keys[g][3] for g in group_lines]
-            member_raw_texts = [line_data[line_indices_keys[g][0]]["raw"] for g in group_lines]
-
-            groups.append({
-                "kind": kind,
-                "key": key_i,
-                "line_nums": member_line_nums,
-                "phrases": member_phrases,
-                "had_stops": member_stops,
-                "raw_texts": member_raw_texts,
-                "line_indices": [line_indices_keys[g][0] for g in group_lines],
-            })
-            for g in group_lines:
-                used.add(line_indices_keys[g][0])
-
-        return groups
-
+    # ── Anaphora ────────────────────────────────────────────────────────────
     if detect_ana:
-        ana_input = [
-            (i, ld["start_key"], ld["start_phrase"], ld["start_had_stop"])
-            for i, ld in enumerate(line_data)
-        ]
-        occurrences += find_groups(ana_input, "anaphora")
+        items = []
+        for i, ld in enumerate(line_data):
+            toks = ld["tokens"]
+            indexed = _skip_stops_start(toks, phrase_length, norm_stops, skip)
+            had_stop = (len(indexed) > 0 and indexed[0][0] > 0)
+            key = phrase_key(indexed) if len(indexed) == phrase_length else ""
+            items.append((i, key, indexed, had_stop, ld["line_num"]))
+        occurrences += find_groups(items, window, min_occ, "anaphora")
 
+    # ── Epiphora ────────────────────────────────────────────────────────────
     if detect_epi:
-        epi_input = [
-            (i, ld["end_key"], ld["end_phrase"], ld["end_had_stop"])
-            for i, ld in enumerate(line_data)
-        ]
-        occurrences += find_groups(epi_input, "epiphora")
+        items = []
+        for i, ld in enumerate(line_data):
+            toks = ld["tokens"]
+            indexed = _skip_stops_end(toks, phrase_length, norm_stops, skip)
+            last_content_idx = indexed[-1][0] if indexed else -1
+            had_stop = (last_content_idx < len(toks) - 1) if indexed else False
+            key = phrase_key(indexed) if len(indexed) == phrase_length else ""
+            items.append((i, key, indexed, had_stop, ld["line_num"]))
+        occurrences += find_groups(items, window, min_occ, "epiphora")
 
-    # -----------------------------------------------------------------------
-    # Build set of (line_num, kind) for fast highlight lookup
-    # -----------------------------------------------------------------------
-    # A line can be both anaphora AND epiphora (symploce) — we mark both.
-    ana_line_set = set()
-    epi_line_set = set()
+    # ── Word Repetition ─────────────────────────────────────────────────────
+    # Clause-level: split by punctuation (., ·, ;, ,) and newlines.
+    # For each clause, extract its opening phrase (first N non-stop words)
+    # and detect repetition across consecutive clauses within the window.
+    wr_highlight = {}   # maps (line_num, tok_text, char_start) → css_class
+    if detect_wr:
+        all_toks = tokenize_text(text)
+        for t in all_toks:
+            t["norm"] = normalize_word(t["text"], opts)
+
+        # Split into clauses: a new clause starts at clause_break_before=True
+        clauses = []
+        current = []
+        for t in all_toks:
+            if t["clause_break_before"] and current:
+                clauses.append(current)
+                current = []
+            current.append(t)
+        if current:
+            clauses.append(current)
+
+        # Build items list for find_groups
+        items = []
+        for ci, clause in enumerate(clauses):
+            indexed = _skip_stops_start(clause, phrase_length, norm_stops, skip)
+            had_stop = (len(indexed) > 0 and indexed[0][0] > 0)
+            key = phrase_key(indexed) if len(indexed) == phrase_length else ""
+            # line_num: use the line of the first token
+            lnum = clause[0]["line_num"] if clause else 0
+            items.append((ci, key, indexed, had_stop, lnum))
+
+        wr_groups = find_groups(items, window, min_occ, "word_repetition")
+        occurrences += wr_groups
+
+        # Record which tokens need highlighting in each line
+        for grp in wr_groups:
+            for phrase_toks in grp["phrases"]:
+                for t in phrase_toks:
+                    key_wr = (t["line_num"], t["char_start"])
+                    wr_highlight[key_wr] = "rep-wordrepeat"
+
+    # ── Build per-line highlight index maps ─────────────────────────────────
+    # Map: line_num → { tok_list_index → css_class }
+    line_highlights = {}   # line_num → dict(tok_index → css)
+
+    def add_highlight(line_num, tok_index, css):
+        lh = line_highlights.setdefault(line_num, {})
+        existing = lh.get(tok_index, "")
+        if existing and existing != css:
+            lh[tok_index] = existing + " " + css
+        else:
+            lh[tok_index] = css
+
+    # Anaphora / epiphora occurrences
     for occ in occurrences:
-        for ln in occ["line_nums"]:
-            if occ["kind"] == "anaphora":
-                ana_line_set.add(ln)
-            else:
-                epi_line_set.add(ln)
+        if occ["kind"] not in ("anaphora", "epiphora"):
+            continue
+        css = "rep-anaphora" if occ["kind"] == "anaphora" else "rep-epiphora"
+        # unit_indices are line_data indices (0-based)
+        for ui, phrase_toks in zip(occ["unit_indices"], occ["phrases"]):
+            ld = line_data[ui]
+            full_toks = ld["tokens"]
+            # phrase_toks are token dicts; find their indices in full_toks
+            phrase_texts = {id(t): t for t in phrase_toks}
+            for ti, ft in enumerate(full_toks):
+                if id(ft) in phrase_texts:
+                    add_highlight(ld["line_num"], ti, css)
 
-    # -----------------------------------------------------------------------
-    # Build annotated HTML
-    # For each line: highlight the start-phrase (anaphora, gold) and/or
-    # end-phrase (epiphora, teal) tokens in the raw line text.
-    # We do this by locating the token text within the raw line and wrapping
-    # it in a <span>.
-    # -----------------------------------------------------------------------
+    # Word-repetition occurrences — use char_start for cross-line matching
+    # We need to map back: for each line, which token char_starts are highlighted?
+    wr_char_starts = {}   # line_num → set of char_start values to highlight
+    for grp in occurrences:
+        if grp["kind"] != "word_repetition":
+            continue
+        for phrase_toks in grp["phrases"]:
+            for t in phrase_toks:
+                wr_char_starts.setdefault(t["line_num"], set()).add(t["char_start"])
 
-    def highlight_tokens_in_line(raw_line: str, phrase_tokens: list[dict],
-                                  position: str, css_class: str,
-                                  skip_stops: bool, norm_stops_set: set,
-                                  line_tokens: list[dict]) -> str:
-        """
-        Return raw_line with the phrase tokens wrapped in <span class=css_class>.
-        We locate them by scanning the raw line for the token texts.
-        """
-        if not phrase_tokens:
-            return html.escape(raw_line)
-
-        # Build list of (token_text, is_phrase_member) for all tokens in line
-        phrase_norms = {t["norm"] for t in phrase_tokens}
-
-        # For start: the phrase tokens are the first phrase_length non-stop tokens
-        # For end:   the phrase tokens are the last phrase_length non-stop tokens
-        # We need to know their positions in the original token list.
-
-        toks = line_tokens
-        if position == "start":
-            candidate_toks = []
-            for t in toks:
-                if skip_stops and _is_stopword(t["norm"], norm_stops_set):
-                    continue
-                candidate_toks.append(t)
-            highlight_texts = {t["text"] for t in candidate_toks[:phrase_length]}
-            highlight_set_indices = []
-            count = 0
-            for i, t in enumerate(toks):
-                if skip_stops and _is_stopword(t["norm"], norm_stops_set):
-                    continue
-                if count < phrase_length:
-                    highlight_set_indices.append(i)
-                    count += 1
-                else:
-                    break
-        else:  # end
-            candidate_toks = []
-            for t in toks:
-                if skip_stops and _is_stopword(t["norm"], norm_stops_set):
-                    continue
-                candidate_toks.append(t)
-            tail = candidate_toks[-phrase_length:] if len(candidate_toks) >= phrase_length else candidate_toks
-            highlight_texts_list = [t["text"] for t in tail]
-            # Find their indices in original token list (from the end)
-            highlight_set_indices = []
-            count = 0
-            needed = len(highlight_texts_list)
-            for i in range(len(toks) - 1, -1, -1):
-                t = toks[i]
-                if skip_stops and _is_stopword(t["norm"], norm_stops_set):
-                    continue
-                if count < needed:
-                    highlight_set_indices.append(i)
-                    count += 1
-                else:
-                    break
-
-        highlight_set = {toks[i]["text"] for i in highlight_set_indices}
-
-        # Now rebuild line HTML token by token
-        parts = []
-        raw_remaining = raw_line
-        token_idx = 0
-        char_pos = 0
-
-        for t in toks:
-            # Find this token in raw_remaining
-            tok_text = t["text"]
-            idx = raw_remaining.find(tok_text)
-            if idx == -1:
-                continue
-            # Everything before this token
-            parts.append(html.escape(raw_remaining[:idx]))
-            # The token itself
-            escaped = html.escape(tok_text)
-            if tok_text in highlight_set:
-                parts.append(f'<span class="{css_class}">{escaped}</span>')
-            else:
-                parts.append(escaped)
-            raw_remaining = raw_remaining[idx + len(tok_text):]
-
-        parts.append(html.escape(raw_remaining))
-        return "".join(parts)
-
-    skip_stops = opts.get("skip_stopwords", True)
+    # ── Render annotated HTML line by line ───────────────────────────────────
     html_lines = []
     for ld in line_data:
         ln = ld["line_num"]
         raw = ld["raw"]
         toks = ld["tokens"]
 
-        is_ana = ln in ana_line_set
-        is_epi = ln in epi_line_set
+        # Merge anaphora/epiphora highlights
+        hi = dict(line_highlights.get(ln, {}))
 
-        if not is_ana and not is_epi:
-            html_lines.append(html.escape(raw))
-            continue
+        # Merge word-repetition highlights (match by char_start)
+        if ln in wr_char_starts:
+            wr_starts = wr_char_starts[ln]
+            for ti, t in enumerate(toks):
+                if t.get("char_start") in wr_starts:
+                    existing = hi.get(ti, "")
+                    hi[ti] = (existing + " rep-wordrepeat").strip() if existing else "rep-wordrepeat"
 
-        # Start with raw line; apply anaphora highlight first, then epiphora
-        line_html = raw  # we'll process token-by-token
-
-        if is_ana and is_epi:
-            # Both: highlight start with anaphora class, end with epiphora class
-            # We do two passes. For simplicity, build a token-level markup.
-            line_html = _highlight_both(raw, toks, ld["start_phrase"], ld["end_phrase"],
-                                        phrase_length, skip_stops, norm_stops)
-        elif is_ana:
-            line_html = highlight_tokens_in_line(
-                raw, ld["start_phrase"], "start", "rep-anaphora",
-                skip_stops, norm_stops, toks)
+        if not hi:
+            html_lines.append(html_mod.escape(raw))
         else:
-            line_html = highlight_tokens_in_line(
-                raw, ld["end_phrase"], "end", "rep-epiphora",
-                skip_stops, norm_stops, toks)
-
-        html_lines.append(line_html)
+            html_lines.append(_build_line_html(raw, toks, hi))
 
     annotated_html = "\n".join(html_lines)
 
-    # -----------------------------------------------------------------------
-    # Number occurrences sequentially
-    # -----------------------------------------------------------------------
+    # Number occurrences
     for n, occ in enumerate(occurrences, 1):
         occ["index"] = n
 
     return annotated_html, occurrences
 
 
-def _highlight_both(raw_line, toks, start_phrase, end_phrase,
-                    phrase_length, skip_stops, norm_stops):
-    """
-    Highlight start-phrase tokens (anaphora) and end-phrase tokens (epiphora)
-    within the same line, handling possible overlap gracefully.
-    """
-    if not toks:
-        return html.escape(raw_line)
-
-    # Determine which token indices get which class
-    # Start phrase: first phrase_length non-stop tokens
-    start_indices = set()
-    count = 0
-    for i, t in enumerate(toks):
-        if skip_stops and t["norm"] in norm_stops:
-            continue
-        if count < phrase_length:
-            start_indices.add(i)
-            count += 1
-        else:
-            break
-
-    # End phrase: last phrase_length non-stop tokens
-    end_indices = set()
-    count = 0
-    needed = phrase_length
-    for i in range(len(toks) - 1, -1, -1):
-        t = toks[i]
-        if skip_stops and t["norm"] in norm_stops:
-            continue
-        if count < needed:
-            end_indices.add(i)
-            count += 1
-        else:
-            break
-
-    parts = []
-    raw_remaining = raw_line
-    for i, t in enumerate(toks):
-        tok_text = t["text"]
-        idx = raw_remaining.find(tok_text)
-        if idx == -1:
-            continue
-        parts.append(html.escape(raw_remaining[:idx]))
-        escaped = html.escape(tok_text)
-        if i in start_indices and i in end_indices:
-            parts.append(f'<span class="rep-anaphora rep-epiphora">{escaped}</span>')
-        elif i in start_indices:
-            parts.append(f'<span class="rep-anaphora">{escaped}</span>')
-        elif i in end_indices:
-            parts.append(f'<span class="rep-epiphora">{escaped}</span>')
-        else:
-            parts.append(escaped)
-        raw_remaining = raw_remaining[idx + len(tok_text):]
-
-    parts.append(html.escape(raw_remaining))
-    return "".join(parts)
-
-
 # ---------------------------------------------------------------------------
-# HTML output template
+# Output
 # ---------------------------------------------------------------------------
 
 HTML_TEMPLATE = """<!doctype html>
 <html><head>
 <meta charset="utf-8">
-<title>Anaphora & Epiphora Highlights</title>
+<title>Greek Rhetorical Repetition Highlights</title>
 <style>
 body {{ font-family: serif; padding: 1.5rem; max-width: 900px; margin: auto; }}
-pre.source {{ white-space: pre-wrap; font-size: 18px; line-height: 1.6; }}
-.rep-anaphora  {{ background: rgba(212, 160, 23, 0.40); border-bottom: 2px solid #d4a017; }}
-.rep-epiphora  {{ background: rgba(30, 160, 160, 0.35); border-bottom: 2px solid #1ea0a0; }}
+pre.source {{ white-space: pre-wrap; font-size: 18px; line-height: 1.7; }}
+.rep-anaphora   {{ background: rgba(212,160,23,0.35); border-bottom: 2px solid #b8860b; }}
+.rep-epiphora   {{ background: rgba(30,160,160,0.30); border-bottom: 2px solid #1a8a8a; }}
+.rep-wordrepeat {{ background: rgba(160,60,180,0.25); border-bottom: 2px solid #8a30a8; }}
 table {{ border-collapse: collapse; width: 100%; margin-top: 1.5rem; font-size: 0.95rem; }}
 td,th {{ border: 1px solid #bbb; padding: 6px 10px; vertical-align: top; }}
 th {{ background: #f4f4f4; }}
 </style>
 </head>
 <body>
-<h1>Anaphora &amp; Epiphora Highlights</h1>
+<h1>Greek Rhetorical Repetition Highlights</h1>
 <p>
-  <span style="background:rgba(212,160,23,0.4);padding:2px 6px;">Gold</span> = Anaphora (A) &nbsp;
-  <span style="background:rgba(30,160,160,0.35);padding:2px 6px;">Teal</span> = Epiphora (E)
+  <span style="background:rgba(212,160,23,0.35);padding:2px 6px;">Gold</span> = Anaphora (A) &nbsp;
+  <span style="background:rgba(30,160,160,0.30);padding:2px 6px;">Teal</span> = Epiphora (E) &nbsp;
+  <span style="background:rgba(160,60,180,0.25);padding:2px 6px;">Violet</span> = Word Repetition (W)
 </p>
 <h2>Annotated Text</h2>
 <pre class="source">{annotated}</pre>
@@ -559,20 +553,21 @@ th {{ background: #f4f4f4; }}
 </body></html>
 """
 
+_KIND_SHORT = {"anaphora": "A", "epiphora": "E", "word_repetition": "W"}
+
 
 def write_outputs(annotated: str, occurrences: list, html_path, csv_path):
+    import html as html_mod2
     rows = []
     csv_rows = []
-
     for occ in occurrences:
-        n = occ["index"]
-        kind_short = "A" if occ["kind"] == "anaphora" else "E"
-        lines_str = ", ".join(str(ln) for ln in occ["line_nums"])
-        phrase_display = html.escape(
+        n          = occ["index"]
+        kind_short = _KIND_SHORT.get(occ["kind"], "?")
+        lines_str  = ", ".join(str(ln) for ln in occ["line_nums"])
+        phrase_display = html_mod2.escape(
             " ".join(t["text"] for t in occ["phrases"][0]) if occ["phrases"] else occ["key"]
         )
         had_stop = "yes" if any(occ["had_stops"]) else "no"
-
         rows.append(
             f"<tr><td>{n}</td><td>{kind_short}</td>"
             f"<td>{phrase_display}</td><td>{lines_str}</td>"
@@ -587,27 +582,21 @@ def write_outputs(annotated: str, occurrences: list, html_path, csv_path):
             "stop_skipped": had_stop,
         })
 
-    html_text = HTML_TEMPLATE.format(
-        annotated=annotated,
-        rows="\n".join(rows),
-    )
+    html_text = HTML_TEMPLATE.format(annotated=annotated, rows="\n".join(rows))
     Path(html_path).write_text(html_text, encoding="utf-8")
 
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        fieldnames = ["index", "type", "phrase_normalised", "phrase_original",
-                      "lines", "stop_skipped"]
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=["index","type","phrase_normalised",
+                                                "phrase_original","lines","stop_skipped"])
         writer.writeheader()
-        for r in csv_rows:
-            writer.writerow(r)
+        writer.writerows(csv_rows)
 
 
 # ---------------------------------------------------------------------------
-# Entry point for Pyodide / GUI
+# Entry point
 # ---------------------------------------------------------------------------
 
 def process(input_path: str, html_path: str, csv_path: str):
-    """Called by app.js via Pyodide."""
     text = Path(input_path).read_text(encoding="utf-8")
     annotated, occurrences = detect_repetitions(text)
     write_outputs(annotated, occurrences, html_path, csv_path)
